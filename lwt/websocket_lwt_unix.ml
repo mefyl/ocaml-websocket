@@ -150,30 +150,39 @@ let server_fun ?read_buf ?write_buf check_request flow ic oc react =
   let meth = Cohttp.Request.meth request in
   let version = Cohttp.Request.version request in
   let headers = Cohttp.Request.headers request in
-  let key = Cohttp.Header.get headers "sec-websocket-key" in
-  (match
-     ( version,
-       meth,
-       Cohttp.Header.get headers "upgrade",
-       key,
-       upgrade_present headers,
-       check_request request )
-   with
-  | `HTTP_1_1, `GET, Some up, Some key, true, true
-    when String.Ascii.lowercase up = "websocket" ->
-      Lwt.return key
-  | _ ->
-      write_failed_response oc >>= fun () ->
-      Lwt.fail (Protocol_error "Bad headers"))
-  >>= fun key ->
-  let hash = key ^ websocket_uuid |> b64_encoded_sha1sum in
-  let response_headers =
-    Cohttp.Header.of_list
-      [
-        ("Upgrade", "websocket");
-        ("Connection", "Upgrade");
-        ("Sec-WebSocket-Accept", hash);
-      ]
+  let key = Cohttp.Header.get headers "sec-websocket-key"
+  and upgrade = Cohttp.Header.get headers "upgrade" in
+  if not (upgrade_present headers) then
+    Lwt.fail (Protocol_error "Bad connection headers")
+  else if not (check_request request) then
+    Lwt.fail (Protocol_error "Bad request")
+  else
+    (match
+       ( version,
+         meth,
+         upgrade,
+         key)
+     with
+     | `HTTP_1_1, `GET, Some up, Some key
+          when String.Ascii.lowercase up = "websocket" ->
+        Lwt.return key
+     | _ ->
+        write_failed_response oc >>= fun () ->
+        if Option.is_none upgrade then
+          Lwt.fail (Protocol_error "Missing upgrade header")
+        else if Option.is_none key then
+          Lwt.fail (Protocol_error "Missing sec-websocket-key header")
+        else
+          Lwt.fail (Protocol_error "Bad HTTP version or method"))
+    >>= fun key ->
+    let hash = key ^ websocket_uuid |> b64_encoded_sha1sum in
+    let response_headers =
+      Cohttp.Header.of_list
+        [
+          ("Upgrade", "websocket");
+          ("Connection", "Upgrade");
+          ("Sec-WebSocket-Accept", hash);
+        ]
   in
   let response =
     Cohttp.Response.make ~status:`Switching_protocols
