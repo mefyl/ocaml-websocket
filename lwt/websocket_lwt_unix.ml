@@ -209,6 +209,9 @@ let establish_server ?read_buf ?write_buf ?timeout ?stop
         (function
           | End_of_file -> Lwt.return_unit
           | HTTP_Error _ -> Lwt.return_unit
+          | Protocol_error error ->
+             Logs_lwt.warn
+               (fun m -> m "drop connection because of protocol error: %s" error)
           | exn -> Lwt.fail exn))
 
 let mk_frame_stream recv =
